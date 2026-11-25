@@ -1,0 +1,262 @@
+---
+# Diagnose ServiceNow API access from an AAP 2.7 Execution Environment.
+#
+# Authentication comes from the custom ServiceNow credential already injected
+# as SN_HOST, SN_USERNAME, and SN_PASSWORD. This playbook does not read or
+# pass the username or password. The servicenow.itsm collection reads them
+# from the environment when instance credentials are omitted.
+#
+# servicenow.itsm.api cannot perform GET (post, patch, and delete only).
+# The read-only call uses servicenow.itsm.api_info, the collection GET module,
+# with the same environment-variable authentication. The optional standard
+# change call uses servicenow.itsm.api.
+#
+# Limitations are documented in ansible/README.md. In particular, the API
+# module defaults data to {} so an omitted body and an empty mapping are the
+# same request, and HTTP status is not a return field.
+
+- name: Diagnose ServiceNow API access
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    request_mode: get
+    post_body_mode: omit
+    confirm_post: ""
+    approved_dev_url: ""
+    template_id: ""
+    snow_host_pattern: '^https://[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*(?::[0-9]{1,5})?$'
+    template_id_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$'
+
+  tasks:
+    - name: Check diagnostic options
+      ansible.builtin.assert:
+        that:
+          - request_mode in ['get', 'post']
+          - post_body_mode in ['omit', 'empty']
+          - approved_dev_url | length > 0
+        fail_msg: >-
+          Set approved_dev_url to the https DEV origin, request_mode to get
+          or post, and post_body_mode to omit or empty. No API request was sent.
+        success_msg: "Diagnostic options are present."
+
+    - name: Compare SN_HOST with the approved DEV origin
+      ansible.builtin.set_fact:
+        snow_target_approved: "{{ (host_ok | bool) and (host_norm == approved_norm) }}"
+      no_log: true
+      vars:
+        host_norm: "{{ lookup('env', 'SN_HOST') | default('', true) | trim | regex_replace('/+$', '') | lower }}"
+        approved_norm: "{{ approved_dev_url | default('', true) | trim | regex_replace('/+$', '') | lower }}"
+        host_ok: "{{ (host_norm is match(snow_host_pattern)) and (approved_norm is match(snow_host_pattern)) }}"
+
+    - name: Stop unless the credential targets the approved DEV origin
+      ansible.builtin.assert:
+        that:
+          - snow_target_approved | bool
+        fail_msg: >-
+          SN_HOST is missing, is not an https origin, or does not match
+          approved_dev_url. No API request was sent.
+        success_msg: "SN_HOST matches the approved DEV origin."
+
+    - name: Require explicit confirmation before POST
+      when: request_mode == 'post'
+      ansible.builtin.assert:
+        that:
+          - confirm_post | trim == 'POST'
+          - template_id | trim is match(template_id_pattern)
+          - not (ansible_check_mode | default(false) | bool)
+        fail_msg: >-
+          POST was not sent. Set confirm_post to POST, set template_id to
+          the standard change template identifier, and run with check mode
+          off. Check mode does not call the API for this create.
+        success_msg: "POST confirmation is present. Check mode is off."
+
+    # ignore_errors keeps the failure for the sanitized summary. It does
+    # not retry the request. The placeholder query avoids listing the table:
+    # api_info has no sysparm_limit and its client pages through every match.
+    - name: Read one change-request field to verify authentication
+      servicenow.itsm.api_info:
+        resource: change_request
+        columns:
+          - number
+        sysparm_query: number=CHGEXAMPLE0000000
+        exclude_reference_link: true
+        no_count: true
+      delegate_to: localhost
+      vars:
+        ansible_connection: local
+      no_log: true
+      ignore_errors: true
+      register: get_raw
+
+    # Separate tasks keep data: {} as a real mapping. A Jinja value of {}
+    # can arrive as a string. Neither task sets retries, until, or loop.
+    # The collection can still repeat a TLS handshake timeout inside one call.
+    # Omitting data does not omit the body: the module default is {}.
+    - name: POST a standard change with the data parameter omitted
+      when:
+        - request_mode == 'post'
+        - post_body_mode == 'omit'
+      servicenow.itsm.api:
+        action: post
+        api_path: "api/sn_chg_rest/change/standard/{{ template_id | trim }}"
+      delegate_to: localhost
+      vars:
+        ansible_connection: local
+      no_log: true
+      ignore_errors: true
+      register: post_omit_raw
+
+    - name: POST a standard change with an empty mapping
+      when:
+        - request_mode == 'post'
+        - post_body_mode == 'empty'
+      servicenow.itsm.api:
+        action: post
+        api_path: "api/sn_chg_rest/change/standard/{{ template_id | trim }}"
+        data: {}
+      delegate_to: localhost
+      vars:
+        ansible_connection: local
+      no_log: true
+      ignore_errors: true
+      register: post_empty_raw
+
+    - name: Count GET rows without retaining the payload
+      ansible.builtin.set_fact:
+        get_record_count: >-
+          {{
+            (get_raw.record | default([], true) | length | string)
+            if (
+              not (get_raw.failed | default(false) | bool)
+              and (get_raw.record | default([], true) is sequence)
+              and (get_raw.record | default([], true) is not string)
+              and (get_raw.record | default([], true) is not mapping)
+            )
+            else 'not available'
+          }}
+      changed_when: false
+      no_log: true
+
+    - name: Reduce module results to a sanitized summary
+      ansible.builtin.set_fact:
+        api_summaries: "{{ api_summaries | default([]) + [summary_item] }}"
+      changed_when: false
+      no_log: true
+      loop:
+        - label: get
+          failed: "{{ get_raw.failed | default(false) | bool }}"
+          skipped: false
+          msg: "{{ get_raw.msg | default('') | string }}"
+          record_count: "{{ get_record_count }}"
+        - label: post
+          failed: "{{ (post_empty_raw.failed | default(false) | bool) if post_body_mode == 'empty' else (post_omit_raw.failed | default(false) | bool) }}"
+          skipped: "{{ (post_empty_raw.skipped | default(false) | bool) if post_body_mode == 'empty' else (post_omit_raw.skipped | default(false) | bool) }}"
+          msg: "{{ (post_empty_raw.msg | default('') | string) if post_body_mode == 'empty' else (post_omit_raw.msg | default('') | string) }}"
+          record_count: "not applicable"
+      loop_control:
+        label: "{{ item.label }}"
+      vars:
+        raw_msg: "{{ item.msg | string }}"
+        status_token: "{{ raw_msg | regex_search('Unexpected response - [0-9]{3}') | default('', true) }}"
+        auth_token: "{{ raw_msg | regex_search('authenticate with the instance: [0-9]{3}') | default('', true) }}"
+        message_token: >-
+          {{ raw_msg | regex_search('"message"\s*:\s*"[^"]{0,300}"') | default('', true) }}
+        detail_token: >-
+          {{ raw_msg | regex_search('"detail"\s*:\s*"[^"]{0,300}"') | default('', true) }}
+        message_text: >-
+          {{ message_token | regex_replace('^"message"\s*:\s*"', '') | regex_replace('"$', '') }}
+        detail_text: >-
+          {{ detail_token | regex_replace('^"detail"\s*:\s*"', '') | regex_replace('"$', '') }}
+        combined: >-
+          {{
+            (message_text ~ (('. ' ~ detail_text) if (detail_text | length > 0 and detail_text != message_text) else ''))
+            | trim
+          }}
+        redacted: >-
+          {{
+            combined
+            | regex_replace('(?i)(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/-]{8,})(?=\S*[0-9+/=])[A-Za-z0-9._~+/-]+', '[REDACTED]')
+            | regex_replace('(?i)(password|token|secret|authorization)\s*[:=]\s*\S+', '[REDACTED]')
+            | regex_replace('[A-Fa-f0-9]{32,}', '[REDACTED]')
+            | regex_replace('[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[REDACTED]')
+            | regex_replace('https?://\S+', '[REDACTED]')
+          }}
+        redacted_safe: >-
+          {{
+            (redacted | length > 0)
+            and (redacted | length <= 400)
+            and ('{' not in redacted)
+            and ('}' not in redacted)
+            and ('Unexpected response' not in redacted)
+            and ('Authorization' not in redacted)
+            and ('SN_' not in redacted)
+            and ('http://' not in redacted)
+            and ('https://' not in redacted)
+          }}
+        http_status: >-
+          {{
+            'not run' if (item.skipped | bool)
+            else (
+              (status_token | regex_replace('^Unexpected response - ', ''))
+              if (status_token | length > 0)
+              else (
+                (auth_token | regex_search('[0-9]{3}') | default('not available', true))
+                if (auth_token | length > 0)
+                else ('not returned' if not (item.failed | bool) else 'not available')
+              )
+            )
+          }}
+        call_outcome: >-
+          {{
+            'not run' if (item.skipped | bool)
+            else ('failed' if (item.failed | bool) else 'success')
+          }}
+        call_detail: >-
+          {{
+            'POST was not requested.' if (item.label == 'post' and (item.skipped | bool))
+            else (
+              'Read completed. Matching record contents are not displayed. A success from this module does not include the HTTP status, and the collection treats HTTP 404 as success.'
+              if (item.label == 'get' and (call_outcome | trim) == 'success')
+              else (
+                'The module reported success. A standard change may have been created. The record is not displayed, and the HTTP status was not returned.'
+                if (item.label == 'post' and (call_outcome | trim) == 'success')
+                else (
+                  'Authentication failed. The collection does not include the response body for this error.'
+                  if (auth_token | length > 0)
+                  else (
+                    'The servicenow.itsm module was not found in this Execution Environment.'
+                    if ('was not found in configured module paths' in raw_msg)
+                    else (
+                      'The request timed out. No response body is displayed.'
+                      if ('timed out' in raw_msg and 'Unexpected response' not in raw_msg)
+                      else (
+                        redacted if (redacted_safe | bool)
+                        else 'The call failed. The response body was omitted because it could not be reduced to a safe ServiceNow message. Use the HTTP status when it is present.'
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          }}
+        summary_item:
+          check: "{{ item.label }}"
+          outcome: "{{ call_outcome | trim }}"
+          http_status: "{{ http_status | trim }}"
+          detail: "{{ call_detail | trim }}"
+          records_returned: "{{ item.record_count if item.label == 'get' else 'not applicable' }}"
+          requested_body: "{{ post_body_mode if item.label == 'post' else 'not applicable' }}"
+          collection_body: "{{ 'empty JSON object for both omit and empty' if item.label == 'post' else 'not applicable' }}"
+
+    - name: Show the sanitized ServiceNow summary
+      ansible.builtin.debug:
+        var: api_summaries
+
+    - name: Fail the job when a ServiceNow call failed
+      ansible.builtin.fail:
+        msg: >-
+          ServiceNow diagnostic failed. The sanitized summary is above.
+          Credentials, authorization headers, and raw responses were not printed.
+      when: api_summaries | selectattr('outcome', 'equalto', 'failed') | list | length > 0

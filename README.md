@@ -2,7 +2,7 @@
 
 Portable, generic troubleshooting scripts for infrastructure and automation work. Copy the script you need into a restricted environment. Nothing in this repository should identify a client, a real environment, or a real credential.
 
-The first utility diagnoses one HTTPS REST call. Other folders are reserved for later work and do not contain scripts yet.
+The first utility diagnoses one HTTPS REST call. `ansible/servicenow_api_diagnostic.yml` diagnoses ServiceNow API access from Ansible Automation Platform. The other folders are reserved.
 
 ## Layout
 
@@ -15,6 +15,8 @@ ops-toolkit/
 │   ├── README.md
 │   └── tests/Invoke-ApiDiagnostic.Tests.ps1
 ├── ansible/
+│   ├── README.md
+│   └── servicenow_api_diagnostic.yml
 ├── linux/
 ├── windows/
 └── network/
@@ -23,7 +25,7 @@ ops-toolkit/
 | Path | Contents |
 | --- | --- |
 | `api/` | REST connectivity, authentication, HTTP status, and TLS failure classification |
-| `ansible/` | Reserved for Ansible and Ansible Automation Platform |
+| `ansible/` | ServiceNow API diagnostic for Ansible Automation Platform. See `ansible/README.md`. |
 | `linux/` | Reserved for Linux administration |
 | `windows/` | Reserved for Windows administration |
 | `network/` | Reserved for network connectivity, TLS, and certificates |
