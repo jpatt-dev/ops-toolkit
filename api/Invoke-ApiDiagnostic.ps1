@@ -409,21 +409,52 @@ function Get-JsonPropertyValue {
     return $null
 }
 
+function Get-JsonStringProperty {
+    param($Object, [string]$Name)
+    $value = Get-JsonPropertyValue -Object $Object -Name $Name
+    if ($value -isnot [string]) { return $null }
+    $text = $value.Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    return $text
+}
+
+function Join-DiagnosticMessage {
+    param(
+        [AllowEmptyString()]
+        [string]$Primary,
+        [AllowEmptyString()]
+        [string]$Detail
+    )
+    if ([string]::IsNullOrWhiteSpace($Primary)) { return $null }
+    $primaryText = $Primary.Trim()
+    if ([string]::IsNullOrWhiteSpace($Detail)) { return $primaryText }
+    $detailText = $Detail.Trim()
+    # A long detail is often a record dump. Keep the short message instead.
+    if ($detailText.Length -gt 400 -or $detailText -eq $primaryText) { return $primaryText }
+    if ($primaryText.EndsWith('.')) { return ($primaryText + ' ' + $detailText) }
+    return ($primaryText + '. ' + $detailText)
+}
+
 function Get-FirstJsonMessage {
     param($Object, [int]$Depth = 0)
-    if ($null -eq $Object -or $Depth -gt 4) {
+    if ($null -eq $Object -or $Depth -gt 4) { return $null }
+    if ($Object -is [string] -or $Object -is [System.ValueType] -or $Object -is [System.Array]) {
         return $null
     }
-    foreach ($name in @('message', 'error_description', 'detail', 'title', 'description', 'faultstring')) {
-        $value = Get-JsonPropertyValue -Object $Object -Name $name
-        if ($value -is [string] -and -not [string]::IsNullOrWhiteSpace($value)) {
-            return $value
-        }
+
+    $primary = $null
+    foreach ($name in @('message', 'error_message', 'error_description', 'faultstring')) {
+        $primary = Get-JsonStringProperty -Object $Object -Name $name
+        if ($primary) { break }
+    }
+    $detail = Get-JsonStringProperty -Object $Object -Name 'detail'
+    if ($primary) {
+        return Join-DiagnosticMessage -Primary $primary -Detail $detail
     }
 
     $errorValue = Get-JsonPropertyValue -Object $Object -Name 'error'
     if ($errorValue -is [string] -and -not [string]::IsNullOrWhiteSpace($errorValue)) {
-        return $errorValue
+        return $errorValue.Trim()
     }
     if ($null -ne $errorValue -and $errorValue -isnot [string] -and $errorValue -isnot [System.ValueType]) {
         $nestedError = Get-FirstJsonMessage -Object $errorValue -Depth ($Depth + 1)
@@ -434,11 +465,28 @@ function Get-FirstJsonMessage {
     if ($null -ne $errorsValue) {
         foreach ($item in @($errorsValue)) {
             if ($item -is [string] -and -not [string]::IsNullOrWhiteSpace($item)) {
-                return $item
+                return $item.Trim()
             }
             $nestedItem = Get-FirstJsonMessage -Object $item -Depth ($Depth + 1)
             if ($nestedItem) { return $nestedItem }
         }
+    }
+
+    $resultValue = Get-JsonPropertyValue -Object $Object -Name 'result'
+    if ($resultValue -is [System.Array]) {
+        foreach ($item in @($resultValue)) {
+            $nestedResult = Get-FirstJsonMessage -Object $item -Depth ($Depth + 1)
+            if ($nestedResult) { return $nestedResult }
+        }
+    } elseif ($null -ne $resultValue -and $resultValue -isnot [string] -and $resultValue -isnot [System.ValueType]) {
+        $nestedResult = Get-FirstJsonMessage -Object $resultValue -Depth ($Depth + 1)
+        if ($nestedResult) { return $nestedResult }
+    }
+
+    if ($detail) { return $detail }
+    foreach ($name in @('title', 'description')) {
+        $text = Get-JsonStringProperty -Object $Object -Name $name
+        if ($text) { return $text }
     }
 
     foreach ($name in @('code', 'error_code', 'status')) {
@@ -447,6 +495,34 @@ function Get-FirstJsonMessage {
             return 'Error code: ' + [string]$code
         }
     }
+    return $null
+}
+
+function Get-XmlElementText {
+    param([string]$Text, [string]$ElementName)
+    $name = [regex]::Escape($ElementName)
+    $pattern = '(?i)<(?:[\w.-]+:)?' + $name + '(?:\s[^>]*)?>([^<]{1,400})</(?:[\w.-]+:)?' + $name + '>'
+    $match = [regex]::Match($Text, $pattern)
+    if (-not $match.Success) { return $null }
+    $raw = $match.Groups[1].Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    $decoded = [System.Net.WebUtility]::HtmlDecode($raw)
+    if ([string]::IsNullOrWhiteSpace($decoded) -or $decoded -match '[<>]') { return $null }
+    return $decoded.Trim()
+}
+
+function Get-SafeXmlMessage {
+    param([AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text) -or $Text.Length -gt 8192) { return $null }
+    # DTD, entities, and CDATA are not expanded or displayed.
+    if ($Text -match '(?i)<!DOCTYPE|<!ENTITY|<!\[CDATA\[') { return $null }
+
+    $message = Get-XmlElementText -Text $Text -ElementName 'message'
+    if (-not $message) { $message = Get-XmlElementText -Text $Text -ElementName 'error_message' }
+    if (-not $message) { $message = Get-XmlElementText -Text $Text -ElementName 'faultstring' }
+    $detail = Get-XmlElementText -Text $Text -ElementName 'detail'
+    if ($message) { return Join-DiagnosticMessage -Primary $message -Detail $detail }
+    if ($detail -and $detail.Length -le 400) { return $detail }
     return $null
 }
 
@@ -476,6 +552,15 @@ function Get-SafeApiMessage {
             if ($message) { return $message }
         }
         return $null
+    }
+    if ($ContentType -match '(?i)html' -or $trimmed -match '(?i)^(?:\s*<\?xml[^>]*>\s*)?<\s*(?:!DOCTYPE\s+html|html)(?:\s|>)') {
+        return $null
+    }
+    $looksXml = $false
+    if ($ContentType -match '(?i)(^|[+/])xml\b') { $looksXml = $true }
+    if ($trimmed -match '(?i)^\s*<\?xml\b') { $looksXml = $true }
+    if ($looksXml) {
+        return Get-SafeXmlMessage -Text $trimmed
     }
     if ($ContentType -match '(?i)text/plain' -and $trimmed.Length -le 400 -and $trimmed -notmatch '(?i)<\s*html') {
         return $trimmed

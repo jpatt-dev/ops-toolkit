@@ -481,6 +481,90 @@ try {
     Assert-True ($bearer.Reliable) 'Bearer text can be sanitized'
     Assert-SecretAbsent $bearer.Text 'example-token-value' 'Bearer token text is redacted'
 
+    $platformJson = Get-ApiDiagnosticReportText `
+        -Endpoint 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
+        -Method 'POST' `
+        -Authentication 'Basic' `
+        -BodyMode 'JSON' `
+        -RequestContentType 'application/json; charset=utf-8' `
+        -FailureKind 'HTTP' `
+        -StatusCode 400 `
+        -ResponseHeaders @{ 'Content-Type' = 'application/json' } `
+        -ResponseBody '{"error":{"message":"Invalid request","detail":"Required field missing: short description"},"status":"failure","token":"example-token-value","password":"example-password"}' `
+        -Detail '' `
+        -SensitiveLiterals @('example-password', 'example-token-value') `
+        -RequestSent $true
+    Assert-Contains $platformJson 'Message: Invalid request. Required field missing: short description' 'JSON error keeps message and detail'
+    Assert-SecretAbsent $platformJson 'example-token-value' 'JSON error omits a sibling token'
+    Assert-SecretAbsent $platformJson 'example-password' 'JSON error omits a sibling password'
+    Assert-SecretAbsent $platformJson '{"error"' 'JSON error does not print the raw body'
+
+    $recordId = '0123456789abcdef0123456789abcdef'
+    $wrappedJson = Get-ApiDiagnosticReportText `
+        -Endpoint 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
+        -Method 'POST' `
+        -Authentication 'Basic' `
+        -BodyMode 'Empty JSON' `
+        -RequestContentType 'application/json; charset=utf-8' `
+        -FailureKind 'HTTP' `
+        -StatusCode 400 `
+        -ResponseHeaders @{ 'Content-Type' = 'application/json' } `
+        -ResponseBody ('{"result":{"error":{"message":"Template was not found","detail":"Missing record ' + $recordId + '"},"status":"failure"}}') `
+        -Detail '' `
+        -SensitiveLiterals @() `
+        -RequestSent $true
+    Assert-Contains $wrappedJson 'Template was not found' 'Wrapped result error message is extracted'
+    Assert-Contains $wrappedJson '[REDACTED]' 'A long hex identifier in detail is redacted'
+    Assert-SecretAbsent $wrappedJson $recordId 'The hex identifier is not displayed'
+    Assert-SecretAbsent $wrappedJson '"result"' 'Wrapped JSON is not printed raw'
+
+    $errorMessageOnly = Get-SafeApiMessage -ResponseBody '{"result":{"error_message":"Template was not found"}}' -ContentType 'application/json'
+    Assert-True ($errorMessageOnly -eq 'Template was not found') 'error_message is extracted'
+
+    $longDetail = 'x' * 500
+    $shortMessage = Get-SafeApiMessage -ResponseBody ('{"error":{"message":"Invalid request","detail":"' + $longDetail + '"}}') -ContentType 'application/json'
+    Assert-True ($shortMessage -eq 'Invalid request') 'A long detail is not appended to the message'
+
+    $xmlBody = '<?xml version="1.0" encoding="UTF-8"?><response><error><message>Invalid request</message><detail>Required field missing: short description</detail></error><status>failure</status></response>'
+    $xmlReport = Get-ApiDiagnosticReportText `
+        -Endpoint 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
+        -Method 'POST' `
+        -Authentication 'Basic' `
+        -BodyMode 'Not supplied' `
+        -RequestContentType 'Not set' `
+        -FailureKind 'HTTP' `
+        -StatusCode 400 `
+        -ResponseHeaders @{ 'Content-Type' = 'application/xml' } `
+        -ResponseBody $xmlBody `
+        -Detail '' `
+        -SensitiveLiterals @() `
+        -RequestSent $true
+    Assert-Contains $xmlReport 'Message: Invalid request. Required field missing: short description' 'XML error keeps message and detail'
+    Assert-SecretAbsent $xmlReport '<response' 'XML error does not print the raw document'
+    Assert-SecretAbsent $xmlReport '<status>failure</status>' 'XML status element is not printed raw'
+
+    $entityXml = '<?xml version="1.0"?><!DOCTYPE response [<!ENTITY secret "example-token-value">]><response><message>&secret;</message></response>'
+    $entityMessage = Get-SafeApiMessage -ResponseBody $entityXml -ContentType 'text/xml'
+    Assert-True ([string]::IsNullOrWhiteSpace($entityMessage)) 'XML with a DTD is not parsed'
+    $entityReport = Get-ApiDiagnosticReportText `
+        -Endpoint 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
+        -Method 'POST' `
+        -Authentication 'None' `
+        -BodyMode 'Not supplied' `
+        -RequestContentType 'Not set' `
+        -FailureKind 'HTTP' `
+        -StatusCode 400 `
+        -ResponseHeaders @{ 'Content-Type' = 'text/xml' } `
+        -ResponseBody $entityXml `
+        -Detail '' `
+        -SensitiveLiterals @('example-token-value') `
+        -RequestSent $true
+    Assert-SecretAbsent $entityReport 'example-token-value' 'DTD entity text is not displayed'
+    Assert-Contains $entityReport 'The server returned HTTP 400.' 'Unparsed XML falls back to the status'
+
+    $htmlMessage = Get-SafeApiMessage -ResponseBody '<html><body>example-token-value</body></html>' -ContentType 'text/html'
+    Assert-True ([string]::IsNullOrWhiteSpace($htmlMessage)) 'HTML responses are not treated as XML messages'
+
     $afterFiles = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File | ForEach-Object { $_.FullName })
     $fileDiff = Compare-Object -ReferenceObject $beforeFiles -DifferenceObject $afterFiles
     Assert-True ($null -eq $fileDiff) 'No files were created or removed'

@@ -153,9 +153,13 @@ These reports have `HTTP Status: Not available` because the server did not retur
 
 A certificate error stays a TLS error. Do not bypass validation to make the call succeed. Fix the trust chain, hostname, or protocol instead.
 
+## Recipes
+
+[ServiceNow](recipes/servicenow.md) uses this same script for a read-only GET and for the three POST body forms. The recipe is documentation. The script does not require it.
+
 ## Disconnected use
 
-This folder is self-contained. Copy `Invoke-ApiDiagnostic.ps1` and this README. No module installation is required. If Windows blocks the copied script, run `Unblock-File .\Invoke-ApiDiagnostic.ps1`. If execution policy blocks it, start one process with `-ExecutionPolicy Bypass`. Neither action disables certificate checks.
+This folder is self-contained. Copy `Invoke-ApiDiagnostic.ps1`. Copy this README or a recipe if you want the examples offline. No module installation is required. If Windows blocks the copied script, run `Unblock-File .\Invoke-ApiDiagnostic.ps1`. If execution policy blocks it, start one process with `-ExecutionPolicy Bypass`. Neither action disables certificate checks.
 
 ## Offline tests
 

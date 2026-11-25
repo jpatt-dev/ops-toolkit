@@ -89,7 +89,7 @@ Run these examples from a PowerShell session so that `-Body (Get-Content ...)` i
 
 Omit `-ConfirmPost` to confirm interactively. The POST is sent only when you type `POST`.
 
-More detail, including HTTP 400, 401, 403, and TLS interpretation, is in [api/README.md](api/README.md).
+More detail, including HTTP 400, 401, 403, and TLS interpretation, is in [api/README.md](api/README.md). A ServiceNow Change Management walkthrough is in [api/recipes/servicenow.md](api/recipes/servicenow.md).
 
 ## Copying into a disconnected environment
 
