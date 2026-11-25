@@ -1,0 +1,71 @@
+# Client-specific configuration, credentials, and captured diagnostics
+# stay outside this repository. Do not commit them from another folder
+# by disabling these rules.
+
+# Credentials and key material
+*.credential
+*.credentials
+*.secret
+*.secrets
+*.pfx
+*.p12
+*.pem
+*.key
+*.snk
+*.kdbx
+*.clixml
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# Environment and local configuration
+.env
+.env.*
+*.env
+*.local
+*.local.json
+*.local.ps1
+*.local.xml
+config.local.*
+secrets.json
+appsettings.local.json
+appsettings.*.local.json
+
+# Private payloads and saved HTTP diagnostics
+*.private.json
+*.request.json
+*.request.txt
+*.response.json
+*.response.txt
+*.diagnostic.txt
+*.har
+*.pcap
+*.pcapng
+private-payloads/
+payloads/
+captures/
+api-captures/
+api-output/
+
+# Logs, transcripts, and temporary files
+*.log
+*.transcript
+*.tmp
+*.temp
+*.bak
+*.swp
+logs/
+transcripts/
+tmp/
+temp/
+PowerShell_transcript*
+*_transcript.txt
+
+# Editor and OS files
+.vscode/
+.idea/
+*.code-workspace
+Thumbs.db
+Desktop.ini
+.DS_Store
