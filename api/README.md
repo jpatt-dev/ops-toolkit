@@ -155,7 +155,7 @@ A certificate error stays a TLS error. Do not bypass validation to make the call
 
 ## Recipes
 
-[ServiceNow](recipes/servicenow.md) uses this same script for a read-only GET and for the three POST body forms. The recipe is documentation. The script does not require it.
+[ServiceNow](recipes/servicenow.md) is a copy-and-paste guide for an open PowerShell window. It does not require this script. `Invoke-ApiDiagnostic.ps1` is an optional single-file alternative.
 
 ## Disconnected use
 

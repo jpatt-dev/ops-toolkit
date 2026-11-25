@@ -1,166 +1,351 @@
-# ServiceNow API troubleshooting
+# ServiceNow troubleshooting
 
-Use `Invoke-ApiDiagnostic.ps1` to troubleshoot the ServiceNow Change Management API. This recipe does not replace the script and does not add a second client.
+## Quick Start — PowerShell Only
 
-The examples use `https://instance.example.com` and `example-template-id`. Replace those placeholders in your PowerShell session. Do not write a real instance URL, template id, sys_id, username, or captured response into this repository.
+Paste the blocks below into the PowerShell window you already have open. Do not save a `.ps1` file and do not install a module. Windows PowerShell 5.1 and PowerShell 7 both work.
 
-The operation under test is:
+Edit the two placeholders, then paste this block once. It asks for a ServiceNow account and defines one command. It does not call ServiceNow.
 
-```text
-POST /api/sn_chg_rest/change/standard/{template_id}
-```
-
-Run the commands from a PowerShell session in the directory that contains `Invoke-ApiDiagnostic.ps1`. A POST is sent only when `-AllowWrite` is set and you also pass `-ConfirmPost` or type `POST` at the prompt. The script sends that POST once and does not follow a redirect.
-
-## Transfer the script
-
-The script is one file. It does not need this recipe, a module, an install, or administrative rights.
-
-1. Copy `Invoke-ApiDiagnostic.ps1` into the restricted environment. Copy this file too if you want the steps offline.
-2. Do not copy `.git`, `.env`, credential files, logs, or saved responses.
-3. If Windows marks the copy as downloaded, run `Unblock-File .\Invoke-ApiDiagnostic.ps1`. That only removes the mark of the web.
-4. If execution policy blocks the file, start one process with `-ExecutionPolicy Bypass`:
+A POST to the Standard Change API can create a real change record. Test 2 and Test 3 each ask you to type `POST` before that one request is sent. Neither test retries a POST.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Invoke-ApiDiagnostic.ps1 -Uri https://instance.example.com/api/now/table/change_request?sysparm_limit=1
+$devUrl = 'https://dev.example.com'
+$templateId = 'example-template-id'
+
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $protocols = [Net.SecurityProtocolType]::Tls12
+    if ([enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {
+        $protocols = $protocols -bor [Net.SecurityProtocolType]::Tls13
+    }
+    [Net.ServicePointManager]::SecurityProtocol = $protocols
+}
+
+$credential = Get-Credential -Message 'ServiceNow DEV account. The password is not saved or displayed.'
+if (-not $credential) {
+    Write-Output 'Credential prompt was cancelled.'
+}
+
+function Invoke-ServiceNowCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('GET', 'POST')]
+        [string]$Method,
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [switch]$EmptyJson
+    )
+
+    if (-not $credential) {
+        Write-Output 'No credential is available. No request was sent.'
+        return
+    }
+    if (-not $Uri.ToLowerInvariant().StartsWith('https://')) {
+        Write-Output 'Only an https URL is accepted. No request was sent.'
+        return
+    }
+    if ($EmptyJson -and $Method -ne 'POST') {
+        Write-Output 'Empty JSON applies only to POST. No request was sent.'
+        return
+    }
+
+    $encoded = $null
+    $headers = @{ Accept = 'application/json' }
+    $previousProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $password = $credential.GetNetworkCredential().Password
+        $encoded = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes($credential.UserName + ':' + $password)
+        )
+        $password = $null
+        $headers['Authorization'] = 'Basic ' + $encoded
+
+        $request = @{
+            Uri             = $Uri
+            Method          = $Method
+            Headers         = $headers
+            UseBasicParsing = $true
+            ErrorAction     = 'Stop'
+        }
+        if ($Method -eq 'POST') {
+            $request['MaximumRedirection'] = 0
+        }
+        if ($EmptyJson) {
+            $request['Body'] = '{}'
+            $request['ContentType'] = 'application/json; charset=utf-8'
+        }
+
+        $response = Invoke-WebRequest @request
+        Write-Output ('HTTP Status: ' + [int]$response.StatusCode)
+        Write-Output 'Message: Request succeeded. The response body is not displayed.'
+        Write-Output 'No automatic retry performed.'
+    } catch {
+        $caught = $_
+        $status = $null
+        $body = ''
+        $webResponse = $null
+        if ($caught.Exception.PSObject.Properties['Response']) {
+            $webResponse = $caught.Exception.Response
+        }
+        if ($webResponse -and $webResponse.PSObject.Properties['StatusCode']) {
+            $status = [int]$webResponse.StatusCode
+        }
+        if ($caught.ErrorDetails -and $caught.ErrorDetails.Message) {
+            $detailText = [string]$caught.ErrorDetails.Message
+            if ($detailText -and $detailText -ne [string]$caught.Exception.Message) {
+                $body = $detailText
+            }
+        }
+        if (-not $body -and $webResponse -is [System.Net.HttpWebResponse]) {
+            $reader = $null
+            try {
+                $stream = $webResponse.GetResponseStream()
+                if ($stream) {
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    $body = $reader.ReadToEnd()
+                }
+            } catch {
+                $body = ''
+            } finally {
+                if ($reader) { $reader.Dispose() }
+            }
+        }
+        if ($null -eq $status -and $caught.Exception.Message -match '\((\d{3})\)') {
+            $status = [int]$Matches[1]
+        }
+        if ($body.Length -gt 8000) { $body = '' }
+
+        $message = Get-ServiceNowErrorText -Body $body -Encoded $encoded
+        if (-not $message) {
+            $safeFailure = Protect-ServiceNowText -Text $caught.Exception.Message -Encoded $encoded
+            if ($safeFailure) {
+                $message = $safeFailure
+            } elseif ($null -ne $status) {
+                $message = 'The server returned an error. The response text was omitted.'
+            } else {
+                $message = 'The request failed before an HTTP status was returned.'
+            }
+        }
+
+        if ($null -eq $status) {
+            Write-Output 'HTTP Status: Not available'
+        } else {
+            Write-Output ('HTTP Status: ' + $status)
+        }
+        Write-Output ('Message: ' + $message)
+        Write-Output 'No automatic retry performed.'
+
+        try {
+            if ($Error.Count -gt 0 -and $Error[0].Exception -and $caught.Exception -and $Error[0].Exception.Message -eq $caught.Exception.Message) {
+                $Error.RemoveAt(0)
+            }
+        } catch { }
+    } finally {
+        if ($headers.Contains('Authorization')) {
+            $headers['Authorization'] = $null
+            [void]$headers.Remove('Authorization')
+        }
+        $encoded = $null
+        $ProgressPreference = $previousProgress
+    }
+}
+
+function Get-ServiceNowErrorText {
+    param(
+        [AllowEmptyString()][string]$Body,
+        [AllowEmptyString()][string]$Encoded
+    )
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    $text = $Body.Trim()
+    if ($text.Length -gt 8000 -or $text -match '(?i)<!DOCTYPE|<!ENTITY|<!\[CDATA\[') { return $null }
+
+    $extracted = $null
+    if ($text.StartsWith('{') -or $text.StartsWith('[')) {
+        try {
+            $parsed = $text | ConvertFrom-Json -ErrorAction Stop
+            foreach ($item in @($parsed)) {
+                $extracted = Get-ServiceNowJsonText -Object $item
+                if ($extracted) { break }
+            }
+        } catch {
+            $extracted = $null
+        }
+    } elseif ($text -match '(?i)^\s*<\?xml\b' -or $text.StartsWith('<')) {
+        if ($text -match '(?i)<\s*(?:!DOCTYPE\s+html|html)(?:\s|>)') { return $null }
+        $xmlMessage = Get-ServiceNowXmlValue -Text $text -ElementName 'message'
+        if (-not $xmlMessage) { $xmlMessage = Get-ServiceNowXmlValue -Text $text -ElementName 'error_message' }
+        $xmlDetail = Get-ServiceNowXmlValue -Text $text -ElementName 'detail'
+        if ($xmlMessage -and $xmlDetail -and $xmlDetail -ne $xmlMessage -and $xmlDetail.Length -le 400) {
+            if ($xmlMessage.EndsWith('.')) { $extracted = $xmlMessage + ' ' + $xmlDetail }
+            else { $extracted = $xmlMessage + '. ' + $xmlDetail }
+        } elseif ($xmlMessage) {
+            $extracted = $xmlMessage
+        } elseif ($xmlDetail -and $xmlDetail.Length -le 400) {
+            $extracted = $xmlDetail
+        }
+    }
+
+    if (-not $extracted) { return $null }
+    return Protect-ServiceNowText -Text $extracted -Encoded $Encoded
+}
+
+function Get-ServiceNowJsonText {
+    param($Object, [int]$Depth = 0)
+    if ($null -eq $Object -or $Depth -gt 3) { return $null }
+    if ($Object -is [string] -or $Object -is [System.ValueType] -or $Object -is [System.Array]) { return $null }
+
+    $message = $null
+    foreach ($name in @('message', 'error_message', 'error_description', 'faultstring')) {
+        $property = $Object.PSObject.Properties[$name]
+        if ($property -and $property.Value -is [string] -and $property.Value.Trim()) {
+            $message = $property.Value.Trim()
+            break
+        }
+    }
+    $detail = $null
+    $detailProperty = $Object.PSObject.Properties['detail']
+    if ($detailProperty -and $detailProperty.Value -is [string] -and $detailProperty.Value.Trim()) {
+        $detail = $detailProperty.Value.Trim()
+        if ($detail.Length -gt 400) { $detail = $null }
+    }
+    if ($message) {
+        if ($detail -and $detail -ne $message) {
+            if ($message.EndsWith('.')) { return $message + ' ' + $detail }
+            return $message + '. ' + $detail
+        }
+        return $message
+    }
+
+    foreach ($name in @('error', 'result')) {
+        $child = $Object.PSObject.Properties[$name]
+        if (-not $child -or $null -eq $child.Value) { continue }
+        if ($child.Value -is [string] -or $child.Value -is [System.ValueType]) { continue }
+        foreach ($item in @($child.Value)) {
+            $nested = Get-ServiceNowJsonText -Object $item -Depth ($Depth + 1)
+            if ($nested) { return $nested }
+        }
+    }
+    return $detail
+}
+
+function Get-ServiceNowXmlValue {
+    param([string]$Text, [string]$ElementName)
+    $name = [regex]::Escape($ElementName)
+    $pattern = '(?i)<(?:[\w.-]+:)?' + $name + '(?:\s[^>]*)?>([^<]{1,400})</(?:[\w.-]+:)?' + $name + '>'
+    $match = [regex]::Match($Text, $pattern)
+    if (-not $match.Success) { return $null }
+    $decoded = [Net.WebUtility]::HtmlDecode($match.Groups[1].Value.Trim())
+    if ([string]::IsNullOrWhiteSpace($decoded) -or $decoded -match '[<>]') { return $null }
+    return $decoded.Trim()
+}
+
+function Protect-ServiceNowText {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [AllowEmptyString()][string]$Encoded
+    )
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $working = $Text
+    $secrets = @()
+    if ($Encoded) { $secrets += $Encoded }
+    if ($credential) {
+        if ($credential.UserName) { $secrets += [string]$credential.UserName }
+        $password = $credential.GetNetworkCredential().Password
+        if ($password) { $secrets += $password }
+        $password = $null
+    }
+    foreach ($secret in $secrets) {
+        if ([string]::IsNullOrEmpty($secret)) { continue }
+        if ($secret.Length -lt 4) {
+            if ($working.IndexOf($secret, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $null }
+            continue
+        }
+        $working = [regex]::Replace($working, [regex]::Escape($secret), '[REDACTED]', 'IgnoreCase')
+    }
+    $working = [regex]::Replace($working, '(?i)\b(Bearer|Basic)\s+(?=[A-Za-z0-9\-._~+/]{8,})(?=[^\s]*[0-9+/=])[A-Za-z0-9\-._~+/]+', '$1 [REDACTED]')
+    $working = [regex]::Replace($working, '(?i)\b(password|passwd|token|authorization|api[_-]?key)\s*[:=]\s*\S+', '$1=[REDACTED]')
+    $working = [regex]::Replace($working, '\b[A-Fa-f0-9]{32,}\b', '[REDACTED]')
+    if ($working -match '(?i)\b(bearer|basic)\s+(?=[A-Za-z0-9\-._~+/]{8,})(?=[^\s]*[0-9+/=])[A-Za-z0-9\-._~+/]+') { return $null }
+    if ($working.Length -gt 500) { $working = $working.Substring(0, 500) }
+    return $working.Trim()
+}
 ```
 
-5. For the commands below, open PowerShell and run the script by name so that `-Headers` and `-Body` are evaluated in the session. Keep client payloads outside the repository.
+The credential window is the only prompt. No HTTP status is printed yet. Do not display `$credential` or an authorization header. When you are finished, run `Remove-Variable credential`.
 
-Windows PowerShell 5.1 and PowerShell 7 can both run the file. On Windows PowerShell, the script asks for TLS 1.2 or TLS 1.3 for the duration of the call and then restores the previous setting. It does not disable certificate validation.
+On Windows PowerShell, the block selects TLS 1.2 or TLS 1.3 for this session. Certificate checks stay enabled.
 
-## 1. Test connectivity with a read-only GET
+## Test 1 — Read-only GET
 
-Start with a GET. The default method is GET, so a failed or successful read does not create a change.
+This call does not create a change. It checks the DEV URL, TLS, and Basic authentication.
 
 ```powershell
-.\Invoke-ApiDiagnostic.ps1 `
-    -Uri 'https://instance.example.com/api/now/table/change_request?sysparm_limit=1&sysparm_fields=number' `
-    -Headers @{ Accept = 'application/json' } `
-    -UseBasicAuth
+if (-not (Get-Command Invoke-ServiceNowCheck -ErrorAction SilentlyContinue) -or -not $credential) {
+    Write-Output 'Paste the Quick Start block first. No request was sent.'
+} else {
+    $uri = $devUrl.TrimEnd('/') + '/api/now/table/change_request?sysparm_limit=1&sysparm_fields=number'
+    Invoke-ServiceNowCheck -Method GET -Uri $uri
+}
 ```
 
-`Get-Credential` prompts for the ServiceNow user and password. The password is not printed or saved.
+HTTP 200 means the workstation reached the instance and the account was accepted. The record is not printed. HTTP 401 means authentication failed. A DNS or TLS failure shows `HTTP Status: Not available` instead of an HTTP code.
 
-| Result | What it tells you |
+## Test 2 — POST with no body
+
+This can create a real standard change. Paste it only when that one request is authorized. Type `POST` when asked. Any other response sends nothing. The request is not retried.
+
+```powershell
+if (-not (Get-Command Invoke-ServiceNowCheck -ErrorAction SilentlyContinue) -or -not $credential) {
+    Write-Output 'Paste the Quick Start block first. No request was sent.'
+} else {
+    $answer = Read-Host 'Type POST to send one Standard Change request with no body. Any other response cancels'
+    if ($answer -cne 'POST') {
+        Write-Output 'Cancelled. No request was sent.'
+        Write-Output 'No automatic retry performed.'
+    } else {
+        $uri = $devUrl.TrimEnd('/') + '/api/sn_chg_rest/change/standard/' + [Uri]::EscapeDataString($templateId)
+        Invoke-ServiceNowCheck -Method POST -Uri $uri
+    }
+}
+```
+
+HTTP 400 means the API rejected the call. The Message line includes the ServiceNow message and detail when those fields are short enough to show safely. HTTP 401 or 403 is an account or permission problem, not a missing JSON field.
+
+## Test 3 — POST with `{}`
+
+Use this only if Test 2 did not explain the HTTP 400. A POST with no body and a POST of `{}` are different requests. This can also create a real change, and it is not retried.
+
+```powershell
+if (-not (Get-Command Invoke-ServiceNowCheck -ErrorAction SilentlyContinue) -or -not $credential) {
+    Write-Output 'Paste the Quick Start block first. No request was sent.'
+} else {
+    $answer = Read-Host 'Type POST to send one Standard Change request with {}. Any other response cancels'
+    if ($answer -cne 'POST') {
+        Write-Output 'Cancelled. No request was sent.'
+        Write-Output 'No automatic retry performed.'
+    } else {
+        $uri = $devUrl.TrimEnd('/') + '/api/sn_chg_rest/change/standard/' + [Uri]::EscapeDataString($templateId)
+        Invoke-ServiceNowCheck -Method POST -EmptyJson -Uri $uri
+    }
+}
+```
+
+Compare this status and Message with Test 2. If both return the same 401 or 403, stop changing the body. If the messages differ, the API is treating the missing body and `{}` differently.
+
+## How to read the result
+
+| HTTP Status | Meaning |
 | --- | --- |
-| HTTP 200 | DNS, TCP, TLS, and Basic authentication worked. The response body is not displayed. |
-| HTTP 401 | The account or password was rejected, or Basic authentication is not being accepted. |
-| HTTP 403 | The account authenticated, but it cannot read this table. |
-| DNS, Connection, or TLS | The request never received an HTTP status. This is not a change-template problem. |
+| 200 | The GET reached ServiceNow and authentication succeeded. |
+| 400 | The API rejected the content or the template id. Use the Message line. |
+| 401 | The account or password was not accepted. |
+| 403 | The account authenticated, but it is not allowed to perform this action. |
+| 404 | The path or template resource was not found. Some releases report a bad template id as 400 instead. |
+| 405 | This URL does not allow that method. The standard-change action is a POST. |
+| Not available | DNS, the connection, or TLS failed before an HTTP response. |
 
-The report's `HTTP Status` line is `Not available` when the failure is DNS, connection, TLS, or a timeout.
+The commands print the status and a short message. They do not print the password, the authorization header, or the raw response. Do not run `$credential.GetNetworkCredential().Password`.
 
-## 2. Authenticate with Basic authentication
+## Optional script
 
-Pass `-UseBasicAuth` on every call that should log in. To reuse one prompt:
-
-```powershell
-$credential = Get-Credential
-.\Invoke-ApiDiagnostic.ps1 `
-    -Uri 'https://instance.example.com/api/now/table/change_request?sysparm_limit=1&sysparm_fields=number' `
-    -Headers @{ Accept = 'application/json' } `
-    -UseBasicAuth `
-    -Credential $credential
-```
-
-A credential passed without `-UseBasicAuth` is refused and no request is sent. Do not put the user name or password in the URI. Do not pass `Authorization`, `Cookie`, or an API-key header. The script rejects those header names so the secret is not stored in the command line.
-
-## 3. POST with no request body
-
-This call omits the body. It is not the same request as a POST of `{}`.
-
-```powershell
-.\Invoke-ApiDiagnostic.ps1 `
-    -Uri 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
-    -Method POST `
-    -Headers @{ Accept = 'application/json' } `
-    -UseBasicAuth `
-    -Credential $credential `
-    -AllowWrite `
-    -ConfirmPost
-```
-
-The report should show `Request Body: Not supplied` and `Request Content Type: Not set`.
-
-## 4. POST with `{}`
-
-```powershell
-.\Invoke-ApiDiagnostic.ps1 `
-    -Uri 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
-    -Method POST `
-    -EmptyJson `
-    -Headers @{ Accept = 'application/json' } `
-    -UseBasicAuth `
-    -Credential $credential `
-    -AllowWrite `
-    -ConfirmPost
-```
-
-The report should show `Request Body: Empty JSON` and a JSON request content type. The bytes sent are exactly `{}`.
-
-## 5. POST with a JSON payload
-
-Supply the JSON yourself. This example uses a placeholder description, not a client payload.
-
-```powershell
-.\Invoke-ApiDiagnostic.ps1 `
-    -Uri 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
-    -Method POST `
-    -Body '{"short_description":"Example standard change"}' `
-    -Headers @{ Accept = 'application/json' } `
-    -UseBasicAuth `
-    -Credential $credential `
-    -AllowWrite `
-    -ConfirmPost
-```
-
-The report should show `Request Body: JSON`. The script parses the text to confirm it is JSON, then sends that text unchanged. `-Body` and `-EmptyJson` together are rejected and nothing is sent.
-
-For a payload file that lives outside this repository:
-
-```powershell
-$payload = Get-Content -Raw -Path C:\Temp\example-change.json
-.\Invoke-ApiDiagnostic.ps1 `
-    -Uri 'https://instance.example.com/api/sn_chg_rest/change/standard/example-template-id' `
-    -Method POST `
-    -Body $payload `
-    -Headers @{ Accept = 'application/json' } `
-    -UseBasicAuth `
-    -Credential $credential `
-    -AllowWrite `
-    -ConfirmPost
-```
-
-## 6. Read HTTP 400, 401, 403, 404, and 405
-
-Use the `Category` and `Message` lines together. Do not decide the cause from the status code alone. An unknown template id is reported as HTTP 400 by some releases and as HTTP 404 by others. The sanitized message distinguishes those cases.
-
-| Status | Category | Likely meaning for this API | Next comparison |
-| --- | --- | --- | --- |
-| 400 | Bad Request | The request reached Change Management and failed validation. Typical causes are a missing field, a body the API does not accept, or a template id the API rejects as invalid input. | Compare no body, `{}`, and the JSON payload. Read `message` and `detail`. |
-| 401 | Unauthorized | Authentication failed. The body was not the cause. | Repeat the read-only GET with the same credential. |
-| 403 | Forbidden | The account authenticated, but it is not allowed to create this change. Changing the JSON will not grant the role or ACL. | Compare with the GET. A GET of 200 and a POST of 403 points at authorization for the write. |
-| 404 | Not Found | The path, API, or template resource was not found. | Check the path and the template id placeholder. Then compare the message with a 400 from the same URL. |
-| 405 | Method Not Allowed | That URL does not allow the method you sent. The standard-change action is a POST. A GET to that same path can return 405 even when the host and account are valid. | Use the read-only GET for connectivity, and POST only for the change action. |
-
-DNS, connection, and TLS failures still have no HTTP status. Fix those before treating the template or the JSON as the problem.
-
-## 7. Sanitized error details
-
-On an HTTP error, the script looks for a short message and, when present, a short detail. It understands JSON fields named `message`, `error_message`, `detail`, and `error`, including an error nested under `result`. It also reads those element names from a simple XML error document. ServiceNow uses both shapes. Sending `Accept: application/json` keeps the response in JSON. Without that header, ServiceNow often returns XML. The same message and detail are still extracted from a simple XML body.
-
-The rest of the body is not printed. Authorization headers, cookies, tokens, and long hexadecimal identifiers are redacted. A detail longer than 400 characters is not appended. If the text cannot be sanitized, including XML that contains a DTD or embedded markup, the report keeps the HTTP status and omits the body.
-
-Copy the `Message` line into your notes only after you review it. Do not save the raw response, and do not commit either one to this repository.
-
-## 8. Compare the three POST formats
-
-Send the three POST commands to the same URL with the same account, and change only the body. Leave `-AllowWrite` and `-ConfirmPost` in place. Each command makes one attempt.
-
-| Report line | No body | `{}` | JSON payload |
-| --- | --- | --- | --- |
-| Request Body | Not supplied | Empty JSON | JSON |
-| Request Content Type | Not set, unless you set one | `application/json; charset=utf-8` | `application/json; charset=utf-8` |
-
-If all three return the same 401 or 403, stop changing the JSON and fix authentication or authorization. If only one body returns 400, or the `detail` text names a field, the failure is in that body. If the message names the template and every body returns the same 400 or 404, check the template id and the path before editing the payload.
+The tests above do not use a script file. If you later copy `Invoke-ApiDiagnostic.ps1` from this folder onto the workstation, it can run the same kind of single GET or POST. It is optional. Do not download modules for either approach.
