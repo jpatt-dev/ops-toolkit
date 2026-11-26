@@ -1,4 +1,24 @@
-# ServiceNow API diagnostic
+# Ansible and Ansible Automation Platform
+
+Troubleshooting references for Ansible, Execution Environments, and Red Hat Ansible Automation Platform 2.6 and 2.7, plus a ServiceNow API diagnostic job.
+
+Start with the [cheat sheet](cheatsheet.md) during a call. Use the guides for detail.
+
+| Guide | Covers |
+| --- | --- |
+| [cheatsheet.md](cheatsheet.md) | Quick tables: first checks, versions, inventory, runs, connectivity, AAP API, message lookup |
+| [cli-config-debugging.md](cli-config-debugging.md) | CLI commands, `ansible.cfg`, pre-flight checks, verbosity, check mode, the task debugger |
+| [inventory-and-variables.md](inventory-and-variables.md) | Inventory and host patterns, AAP inventory sources, variable precedence and where AAP puts variables |
+| [collections-and-execution-environments.md](collections-and-execution-environments.md) | Collections and dependencies, Execution Environments, `ansible-builder`, `ansible-navigator`, registry authentication, image pulls, internal CAs |
+| [aap-platform-and-controller.md](aap-platform-and-controller.md) | AAP 2.6/2.7 architecture, gateway API, job states, node checks, job templates and surveys, credentials, project sync |
+| [connectivity-ssh-winrm.md](connectivity-ssh-winrm.md) | SSH and WinRM from the Ansible side, privilege escalation, Kerberos, NTLM, PSRP |
+| [common-failures.md](common-failures.md) | Error message lookup for YAML, Jinja2, modules, and partial failures |
+| [servicenow-integration.md](servicenow-integration.md) | `servicenow.itsm` modules, authentication, change lifecycle, CMDB inventory plugin |
+| [servicenow_api_diagnostic.yml](servicenow_api_diagnostic.yml) | AAP job that checks ServiceNow API access. Documented below. |
+
+Related: [windows/winrm-remote-admin.md](../windows/winrm-remote-admin.md), [api/servicenow-rest-concepts.md](../api/servicenow-rest-concepts.md), [network/workflows.md](../network/workflows.md).
+
+## ServiceNow API diagnostic
 
 `servicenow_api_diagnostic.yml` checks ServiceNow from an Ansible Automation Platform 2.7 job. It uses the ServiceNow credential already injected into the Execution Environment. It does not read `SN_USERNAME` or `SN_PASSWORD`, and it does not accept them as extra variables.
 
@@ -6,7 +26,7 @@ The read-only call uses `servicenow.itsm.api_info`. `servicenow.itsm.api` cannot
 
 No customer URL, credential, or template id belongs in this repository. Supply those at launch.
 
-## Job template
+### Job template
 
 Use the Execution Environment that already includes `servicenow.itsm` 2.5.0 or newer. `api_path` was added in 2.5.0.
 
@@ -25,7 +45,7 @@ Use the Execution Environment that already includes `servicenow.itsm` 2.5.0 or n
 
 The credential comparison lowercases both values and removes trailing slashes. `https://dev.example.com` and `https://dev.example.com:443` are different. The job stops before any API call when they differ.
 
-## Extra variables
+### Extra variables
 
 `approved_dev_url` is required for every run, including GET.
 
@@ -56,7 +76,7 @@ post_body_mode: omit
 
 Launch the POST only with approval to create a record on that DEV instance. Do not rerun a failed POST automatically.
 
-## What the job prints
+### What the job prints
 
 API tasks are `no_log`, so their result is censored. That is intentional. Read the task named "Show the sanitized ServiceNow summary".
 
@@ -64,7 +84,7 @@ The summary can include the check name, `success`, `failed`, or `not run`, an HT
 
 A failed call fails the job after that summary. `ignore_errors` on the API tasks only lets the summary run. It does not send the request again.
 
-## Limitations
+### Limitations
 
 **GET module.** `servicenow.itsm.api_info` reads `change_request` with only the `number` column, `sysparm_no_count`, and the placeholder query `number=CHGEXAMPLE0000000`. That query is not a customer record. `api_info` has no `sysparm_limit` parameter, and its client pages through every match, so the playbook does not list the table. Zero rows still means the Table API accepted the authenticated request.
 
