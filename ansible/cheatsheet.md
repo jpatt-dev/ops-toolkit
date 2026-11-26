@@ -42,10 +42,10 @@ Read-only unless marked `CHANGE`. Details are in the linked guides.
 | Hosts and tasks | `ansible-playbook site.yml -i inv --list-hosts --list-tasks` |
 | Dry run on one host | `ansible-playbook site.yml -i inv --check --diff --limit host01.example.com` |
 | Connection detail | `-vvv` (avoid on jobs with secrets) |
-| Skip to a task | `--start-at-task 'Task name'` |
-| Step through | `--step` |
+| `CHANGE` Skip to a task | `--start-at-task 'Task name'` (runs the playbook) |
+| `CHANGE` Step through | `--step` (runs each task you confirm) |
 | Timing | `ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks` |
-| Same as AAP | `ansible-navigator run site.yml -i inv --eei <ee> --mode stdout` |
+| `CHANGE` Same as AAP | `ansible-navigator run site.yml -i inv --eei <ee> --mode stdout` (runs the playbook; add `--check`) |
 
 ## Connectivity
 

@@ -102,7 +102,7 @@ Firewall workflow:
 2. Does a local connection work? `curl -v http://127.0.0.1:<port>`.
 3. Which zone handles the traffic? `firewall-cmd --get-active-zones`.
 4. Is the port or service allowed in that zone? `firewall-cmd --list-all --zone=<zone>`.
-5. Temporarily log denies and retry from the client: `firewall-cmd --set-log-denied=unicast`, then `journalctl -k -f | grep -i reject`.
+5. Temporarily log denies and retry from the client: `firewall-cmd --set-log-denied=unicast` (`CHANGE`), then `journalctl -k -f | grep -i reject`. Turn it off afterwards with `firewall-cmd --set-log-denied=off` (`CHANGE`).
 6. If the host allows it and it still fails, look upstream: network firewalls, security groups, load balancers.
 
 Remember SELinux port labels too. A service on a non-standard port can be allowed by firewalld and still be blocked by SELinux. See [selinux.md](selinux.md#ports).

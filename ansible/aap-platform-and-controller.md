@@ -35,9 +35,15 @@ curl -sS -u "$AAP_USER" https://aap.example.com/api/gateway/v1/ping/
 curl -sS -u "$AAP_USER" https://aap.example.com/api/controller/v2/ping/
 curl -sS -u "$AAP_USER" https://aap.example.com/api/controller/v2/me/
 
-# With a token kept in a variable, not on the command line history:
-curl -sS -H "Authorization: Bearer $AAP_TOKEN" https://aap.example.com/api/controller/v2/jobs/<id>/
+# With a token: read it without echo, and pass the header to curl on stdin
+# (-K -) so the token never appears in the process list or shell history.
+read -rs -p 'AAP token: ' AAP_TOKEN; echo
+printf 'header = "Authorization: Bearer %s"\n' "$AAP_TOKEN" |
+  curl -sS -K - https://aap.example.com/api/controller/v2/jobs/<id>/
+unset AAP_TOKEN
 ```
+
+Do not write `-H "Authorization: Bearer $AAP_TOKEN"` on the command line: other local users can read it with `ps` while curl runs.
 
 Useful read-only controller endpoints:
 
@@ -193,7 +199,7 @@ Project options:
 3. If a task failed: read that task's result. Rerun with `--limit` to one host and verbosity 2.
 4. Compare the EE, project revision, and inventory with the last successful run of the same template.
 5. Check the execution node with `/api/controller/v2/instances/`.
-6. Reproduce outside AAP with `ansible-navigator run` and the same EE.
+6. Reproduce outside AAP with `ansible-navigator run` and the same EE, using `--check` or a test host (`CHANGE`: without `--check` it runs the playbook).
 
 ## Cautions
 

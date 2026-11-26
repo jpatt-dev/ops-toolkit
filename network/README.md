@@ -25,7 +25,7 @@ Host-specific detail lives elsewhere: [linux/networking-dns-firewalld.md](../lin
 ./network/check-endpoint.sh --plain intranet.example.com 80
 ```
 
-It sends one unauthenticated GET and never disables certificate verification. Exit codes identify the failing layer: `1` DNS, `2` TCP, `3` TLS, `4` HTTP. Requirements: `bash`, `getent`, `timeout`, `openssl`, and `curl`, all present on a default RHEL install.
+It sends one unauthenticated GET and never disables certificate verification. Exit codes identify the failing layer: `1` DNS, `2` TCP, `3` TLS, `4` HTTP request did not complete, `6` HTTP 4xx or 5xx status. `5` means a required tool is missing and nothing was checked. Exit `0` only when every requested step passed. Requirements: `bash`, `getent`, `timeout`, `openssl`, and `curl`, all present on a default RHEL install.
 
 ## Conventions
 

@@ -2,7 +2,7 @@
 
 Use this guide when a playbook fails on the command line or inside an Execution Environment and you need to see what Ansible actually did. For inventory and variables, see [inventory-and-variables.md](inventory-and-variables.md). For error messages, see [common-failures.md](common-failures.md).
 
-All commands on this page are read-only unless marked `CHANGE`.
+All commands on this page are read-only unless marked `CHANGE`. Any `ansible-playbook` or `ansible-navigator run` without `--check`, `--syntax-check`, or a `--list-*` option executes the playbook and makes its changes; those lines are marked `CHANGE`.
 
 ## Know which Ansible you are running
 
@@ -101,6 +101,7 @@ Higher verbosity can log URLs, headers, and module arguments. Do not use `-vvv` 
 ## Narrowing a failure
 
 ```bash
+# CHANGE: each of these runs the playbook for real. Add --check --diff to make it a dry run.
 ansible-playbook site.yml -i inventory --limit host01.example.com          # one host
 ansible-playbook site.yml -i inventory --tags patch --skip-tags reboot
 ansible-playbook site.yml -i inventory --start-at-task 'Install updates'   # skip earlier tasks
@@ -148,7 +149,7 @@ The task debugger stops on a failed task and lets you inspect and re-run it.
   debugger: on_failed
 ```
 
-Or for one run: `ANSIBLE_ENABLE_TASK_DEBUGGER=True ansible-playbook site.yml`.
+Or for one run: `ANSIBLE_ENABLE_TASK_DEBUGGER=True ansible-playbook site.yml` (`CHANGE`: runs the playbook).
 
 At the `(debug)` prompt: `p task.args`, `p task_vars['ansible_host']`, `p result._result`, `redo`, `continue`, `quit`.
 
@@ -157,6 +158,7 @@ The debugger needs an interactive terminal. It does not work in an AAP job.
 ## Output formats
 
 ```bash
+# CHANGE: both run the playbook. Add --check to observe without changing hosts.
 ANSIBLE_CALLBACK_RESULT_FORMAT=yaml ansible-playbook site.yml    # readable multi-line results (core 2.13+)
 ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks ansible-playbook site.yml   # per-task timing; needs ansible.posix
 ```
@@ -166,7 +168,7 @@ ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks ansible-playbook site.yml 
 ## Keeping remote files
 
 ```bash
-ANSIBLE_KEEP_REMOTE_FILES=1 ansible-playbook site.yml -vvv
+ANSIBLE_KEEP_REMOTE_FILES=1 ansible-playbook site.yml -vvv     # CHANGE: runs the playbook
 ```
 
 The module payload stays in the remote temp directory shown at `-vvv`. That payload can contain module arguments, including secrets. Delete it when you are done.

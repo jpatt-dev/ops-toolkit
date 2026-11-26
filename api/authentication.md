@@ -78,20 +78,21 @@ OAuth separates getting a token from using it. Troubleshoot the two steps separa
 | `refresh_token` | Renewing an expired access token | `refresh_token`, `client_id`, `client_secret` |
 | `authorization_code` | Interactive apps with a browser | A code from the login redirect |
 
-Token request example (`client_credentials`). Read the secret from a prompt, not the command line:
+Token request example (`client_credentials`). Read the secret from a prompt, and pass it to curl on stdin (`client_secret@-`) so it never appears in curl's arguments:
 
 ```bash
 read -rs -p 'Client secret: ' CLIENT_SECRET; echo
-curl -sS -X POST https://idp.example.com/oauth2/token \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  --data-urlencode 'grant_type=client_credentials' \
-  --data-urlencode "client_id=$CLIENT_ID" \
-  --data-urlencode "client_secret=$CLIENT_SECRET" \
-  --data-urlencode 'scope=api.read' | jq '{token_type, expires_in, scope, error, error_description}'
+printf '%s' "$CLIENT_SECRET" |
+  curl -sS -X POST https://idp.example.com/oauth2/token \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    --data-urlencode 'grant_type=client_credentials' \
+    --data-urlencode "client_id=$CLIENT_ID" \
+    --data-urlencode 'client_secret@-' \
+    --data-urlencode 'scope=api.read' | jq '{token_type, expires_in, scope, error, error_description}'
 unset CLIENT_SECRET
 ```
 
-The `jq` filter shows the outcome without printing the token itself.
+`printf` is a shell built-in, so the secret is not passed as a process argument. The `jq` filter shows the outcome without printing the token itself.
 
 ServiceNow's token endpoint is `https://<instance>/oauth_token.do`. Which grant types it accepts depends on the release and the OAuth application registry entry. See [servicenow-rest-concepts.md](servicenow-rest-concepts.md).
 

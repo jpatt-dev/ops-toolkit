@@ -97,6 +97,7 @@ In Ansible, `ansible.windows.win_updates` returns `reboot_required` for the upda
     state: searched
   register: search
 
+# CHANGE: installs updates and may reboot the host.
 - name: Install, reboot if needed
   ansible.windows.win_updates:
     category_names:

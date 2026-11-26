@@ -100,7 +100,7 @@ With `ansible-navigator`:
 ansible-navigator images --mode stdout                            # images and their contents
 ansible-navigator collections --eei <ee-image> --mode stdout
 ansible-navigator exec --eei <ee-image> -- ansible --version
-ansible-navigator run site.yml -i inventory --eei <ee-image> --mode stdout --pp missing
+ansible-navigator run site.yml -i inventory --eei <ee-image> --mode stdout --pp missing   # CHANGE: runs the playbook; add --check for a dry run
 ```
 
 `--eei` is short for `--execution-environment-image`. `--pp` is the pull policy: `always`, `missing`, `never`, or `tag`. `ansible-navigator run` reproduces AAP job behavior more closely than `ansible-playbook` on the host.

@@ -11,6 +11,10 @@
 #
 # Output can contain hostnames, IP addresses, and user names. Review it
 # before attaching it to a ticket. Do not save it in this repository.
+#
+# Exit codes: 0 the snapshot ran to the end (this does not mean the host
+# is healthy; read the output), 2 usage error. A section that cannot be
+# checked says "could not be determined" instead of reporting a result.
 
 set -u
 export LC_ALL=C
@@ -19,7 +23,7 @@ BRIEF=0
 case "${1:-}" in
     --brief) BRIEF=1 ;;
     -h|--help)
-        sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     "") ;;
@@ -85,14 +89,33 @@ df -iP -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null | awk 'NR==1 {pri
 section "Failed systemd units"
 if have systemctl; then
     out=$(run systemctl --failed --no-legend --plain)
-    if [ -n "$out" ]; then echo "$out"; else echo "none"; fi
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "could not be determined (systemctl exit $rc): $(printf '%s' "$out" | head -1)"
+    elif [ -n "$out" ]; then
+        echo "$out"
+    else
+        echo "none"
+    fi
+else
+    echo "systemctl not found"
 fi
 
 section "Reboot and service restart status"
 if have dnf; then
     if need_root; then
-        run dnf -q needs-restarting -r
-        echo "needs-restarting exit code: $? (1 = reboot required)"
+        # Exit 1 also means "plugin missing" or "dnf error", so the
+        # result is taken from the message, not from the exit code alone.
+        nr_out=$(run dnf -q needs-restarting -r)
+        nr_rc=$?
+        if [ "$nr_rc" -eq 0 ] && printf '%s' "$nr_out" | grep -qi 'not be necessary'; then
+            echo "Reboot required: no"
+        elif [ "$nr_rc" -eq 1 ] && printf '%s' "$nr_out" | grep -qi 'reboot is required'; then
+            echo "Reboot required: YES"
+        else
+            echo "Reboot required: could not be determined (exit $nr_rc)"
+            printf '%s\n' "$nr_out" | head -3 | sed 's/^/  /'
+        fi
     fi
 else
     echo "dnf not found"
@@ -106,8 +129,16 @@ section "SELinux"
 if have getenforce; then
     echo "Mode: $(getenforce)"
     if have ausearch && need_root; then
-        count=$(ausearch -m AVC,USER_AVC -ts today 2>/dev/null | grep -c 'type=AVC\|type=USER_AVC')
-        echo "AVC denials today: ${count:-0}"
+        # ausearch exits 1 both for "no matches" and for real errors.
+        avc_out=$(ausearch -m AVC,USER_AVC -ts today 2>&1)
+        avc_rc=$?
+        if [ "$avc_rc" -eq 0 ]; then
+            echo "AVC denials today: $(printf '%s\n' "$avc_out" | grep -c 'type=AVC\|type=USER_AVC')"
+        elif printf '%s' "$avc_out" | grep -q '<no matches>'; then
+            echo "AVC denials today: 0"
+        else
+            echo "AVC denials today: could not be determined: $(printf '%s' "$avc_out" | head -1)"
+        fi
     fi
 else
     echo "getenforce not found"
@@ -156,4 +187,4 @@ if [ "$BRIEF" -eq 0 ]; then
 fi
 
 echo
-echo "Snapshot complete. Nothing was changed."
+echo "Snapshot complete. Nothing was changed. Review the sections above; exit code 0 does not mean the host is healthy."
